@@ -12,6 +12,10 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+app.get('/', (req, res) => {
+  res.status(200).send('Signal server is running');
+});
+
 // In-memory session store (ephemeral). In production, replace with Redis or database.
 const sessions = new Map(); // sessionId -> { createdAt, password }
 
