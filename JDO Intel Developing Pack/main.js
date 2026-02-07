@@ -1,8 +1,8 @@
 const { app, BrowserWindow, ipcMain, desktopCapturer } = require('electron');
 const path = require('path');
 
-const SIGNALING_URL = process.env.SIGNALING_URL || 'http://192.168.1.15:3001';
-const WS_URL = process.env.WS_URL || 'ws://192.168.1.15:3001/ws';
+const SIGNALING_URL = process.env.SIGNALING_URL || 'https://jdo-signal.onrender.com';
+const WS_URL = process.env.WS_URL || 'wss://jdo-signal.onrender.com/ws';
 
 let mainWindow;
 

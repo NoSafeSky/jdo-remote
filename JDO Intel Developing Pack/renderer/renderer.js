@@ -46,9 +46,9 @@ async function loadSources() {
 
 async function initConfig() {
   config = await window.electronAPI.getConfig();
-  // Fallback to hardcoded LAN defaults if env not provided
-  if (!config.SIGNALING_URL) config.SIGNALING_URL = 'http://192.168.1.15:3001';
-  if (!config.WS_URL) config.WS_URL = 'ws://192.168.1.15:3001/ws';
+  // Fallback to Render defaults if env not provided
+  if (!config.SIGNALING_URL) config.SIGNALING_URL = 'https://jdo-signal.onrender.com';
+  if (!config.WS_URL) config.WS_URL = 'wss://jdo-signal.onrender.com/ws';
 }
 
 async function createSession() {
