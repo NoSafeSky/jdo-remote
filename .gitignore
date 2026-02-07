@@ -1,0 +1,9 @@
+node_modules/
+dist/
+**/dist/
+**/win-unpacked/
+**/builder-effective-config.yaml
+npm-debug.log*
+.env
+.DS_Store
+Thumbs.db
