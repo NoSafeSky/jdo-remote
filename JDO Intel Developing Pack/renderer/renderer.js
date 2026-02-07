@@ -22,6 +22,8 @@ let localSessionId;
 
 const CHUNK_SIZE = 60 * 1024; // 60KB chunks for datachannel
 let incomingFile = null; // { name, size, type, received, chunks: [] }
+let sendQueue = [];
+let sending = false;
 
 function log(msg) {
   const time = new Date().toISOString().substring(11, 19);
@@ -262,12 +264,25 @@ btnSendFiles.addEventListener('click', () => {
     log('No files selected');
     return;
   }
-  // For now, send the first file only (folder input gives entries). Extendable to multiple.
-  const file = files[0];
-  if (!file) return;
+  sendQueue = Array.from(files);
+  if (sending) {
+    log('Already sending files...');
+    return;
+  }
+  log(`Sending ${sendQueue.length} file(s)`);
+  sendNextFile();
+});
+
+function sendNextFile() {
+  const file = sendQueue.shift();
+  if (!file) {
+    sending = false;
+    log('All files sent');
+    return;
+  }
+  sending = true;
   log(`Sending ${file.name} (${Math.round(file.size / 1024)} KB)`);
 
-  // Send metadata
   dataChannel.send(JSON.stringify({ type: 'files-meta', name: file.name, size: file.size, mimetype: file.type || 'application/octet-stream' }));
 
   const reader = new FileReader();
@@ -276,18 +291,20 @@ btnSendFiles.addEventListener('click', () => {
   reader.onload = (e) => {
     if (e.target.error) {
       log('File read error');
+      sendNextFile();
       return;
     }
     const buffer = e.target.result;
     dataChannel.send(buffer);
     offset += buffer.byteLength;
     const pct = ((offset / file.size) * 100).toFixed(1);
-    log(`Sent chunk... ${pct}%`);
+    log(`Sent ${file.name} ... ${pct}%`);
     if (offset < file.size) {
       readSlice(offset);
     } else {
       dataChannel.send(JSON.stringify({ type: 'files-complete' }));
-      log('File send complete');
+      log(`File sent: ${file.name}`);
+      sendNextFile();
     }
   };
 
@@ -297,7 +314,7 @@ btnSendFiles.addEventListener('click', () => {
   };
 
   readSlice(0);
-});
+}
 
 async function bootstrap() {
   setStatus('Initializing...');
