@@ -1,49 +1,40 @@
-const logEl = document.getElementById('log');
 const statusEl = document.getElementById('status');
-const sourceSelect = document.getElementById('source-select');
-const remoteVideo = document.getElementById('remote-video');
-
-const btnStartHost = document.getElementById('btn-start-host');
-const btnJoin = document.getElementById('btn-join');
-const btnCopySession = document.getElementById('btn-copy-session');
-const btnClearLog = document.getElementById('btn-clear-log');
-const btnSendFiles = document.getElementById('btn-send-files');
-const btnRefreshId = document.getElementById('btn-refresh-id');
-
 const hostSessionPill = document.getElementById('host-session-pill');
-const joinSessionIdInput = document.getElementById('join-session-id');
-const fileInput = document.getElementById('file-input');
+const debugLogEl = document.getElementById('debug-log');
 
-let pc;
-let dataChannel;
-let ws;
 let config;
 let localSessionId;
-
-const CHUNK_SIZE = 60 * 1024; // 60KB chunks for datachannel
-let incomingFile = null; // { name, size, type, received, chunks: [] }
-let sendQueue = [];
-let sending = false;
+let ws;
+let pc;
+let pendingRemoteCandidates = [];
+let awaitingApproval = false;
+let modalEl;
+let btnAgree;
+let btnCancel;
+let reconnectTimer;
+let hostPingTimer;
 
 function log(msg) {
-  const time = new Date().toISOString().substring(11, 19);
-  logEl.textContent += `[${time}] ${msg}\n`;
-  logEl.scrollTop = logEl.scrollHeight;
+  console.log(msg);
+  if (debugLogEl) {
+    debugLogEl.hidden = false;
+    const time = new Date().toISOString().substring(11, 19);
+    debugLogEl.textContent += `[${time}] ${msg}\n`;
+    debugLogEl.scrollTop = debugLogEl.scrollHeight;
+  }
+}
+
+async function wsDataToString(data) {
+  if (typeof data === 'string') return data;
+  // Browser WebSocket may deliver Blob or ArrayBuffer
+  if (data instanceof Blob) return data.text();
+  if (data instanceof ArrayBuffer) return new TextDecoder('utf-8').decode(new Uint8Array(data));
+  // Fallback
+  return String(data);
 }
 
 function setStatus(text) {
   statusEl.textContent = text;
-}
-
-async function loadSources() {
-  const sources = await window.electronAPI.getSources();
-  sourceSelect.innerHTML = '';
-  sources.forEach((s) => {
-    const opt = document.createElement('option');
-    opt.value = s.id;
-    opt.textContent = s.name;
-    sourceSelect.appendChild(opt);
-  });
 }
 
 async function initConfig() {
@@ -63,27 +54,128 @@ async function createSession() {
   return res.json();
 }
 
+async function fetchSession(sessionId) {
+  const res = await fetch(`${config.SIGNALING_URL}/session/${sessionId}`);
+  if (!res.ok) throw new Error('Session not found');
+  return res.json();
+}
+
+// Minimal UI mode: only fetch and show session ID.
+
+function showSecurityPrompt() {
+  if (modalEl) {
+    modalEl.classList.add('show');
+    modalEl.hidden = false;
+  }
+}
+
+function hideSecurityPrompt() {
+  if (modalEl) {
+    modalEl.classList.remove('show');
+    modalEl.hidden = true;
+  }
+}
+
+function wireSecurityActions() {
+  modalEl = document.getElementById('security-modal');
+  btnAgree = document.getElementById('btn-security-agree');
+  btnCancel = document.getElementById('btn-security-cancel');
+
+  if (modalEl) {
+    modalEl.classList.remove('show');
+    modalEl.hidden = true;
+  }
+
+  if (btnAgree) {
+    btnAgree.addEventListener('click', async () => {
+      hideSecurityPrompt();
+      if (awaitingApproval) {
+        awaitingApproval = false;
+        await startHost();
+      }
+    });
+  }
+  if (btnCancel) {
+    btnCancel.addEventListener('click', () => {
+      if (awaitingApproval) {
+        sendSignal({ type: 'sync-denied' });
+      }
+      awaitingApproval = false;
+      pendingRemoteCandidates = [];
+      hideSecurityPrompt();
+      setStatus('Cancelled');
+    });
+  }
+}
+
 function connectSignaling(sessionId, role) {
   return new Promise((resolve, reject) => {
     ws = new WebSocket(`${config.WS_URL}?sessionId=${encodeURIComponent(sessionId)}&role=${encodeURIComponent(role)}`);
 
     ws.onopen = () => {
       log('Signaling connected');
+      sendSignal({ type: 'host-online' });
+      if (hostPingTimer) {
+        clearInterval(hostPingTimer);
+      }
+      hostPingTimer = setInterval(() => {
+        if (ws?.readyState === WebSocket.OPEN) {
+          sendSignal({ type: 'host-online' });
+          log('Host online ping');
+        }
+      }, 3000);
       resolve();
     };
     ws.onerror = (e) => {
       log('Signaling error');
       reject(e);
     };
-    ws.onclose = () => log('Signaling closed');
+    ws.onclose = (e) => {
+      log(`Signaling closed (code=${e.code} reason=${e.reason || 'n/a'})`);
+      if (hostPingTimer) {
+        clearInterval(hostPingTimer);
+        hostPingTimer = null;
+      }
+      if (!reconnectTimer) {
+        reconnectTimer = setTimeout(() => {
+          reconnectTimer = null;
+          connectSignaling(localSessionId, 'host').catch(() => {});
+        }, 2000);
+      }
+    };
     ws.onmessage = async (event) => {
-      const msg = JSON.parse(event.data);
-      if (msg.type === 'offer') {
-        await handleOffer(msg);
+      let msg;
+      try {
+        const raw = await wsDataToString(event.data);
+        msg = JSON.parse(raw);
+      } catch (e) {
+        log(`WS message parse failed: ${e?.message || e}`);
+        return;
+      }
+      if (msg.type === 'sync-request') {
+        awaitingApproval = true;
+        setStatus('Awaiting approval');
+        showSecurityPrompt();
+        sendSignal({ type: 'sync-received' });
+      } else if (msg.type === 'host-online') {
+        // ignore
+      } else if (msg.type === 'sync-received') {
+        log('Viewer sync received (echo)');
       } else if (msg.type === 'answer') {
-        await handleAnswer(msg);
+        if (pc) {
+          await pc.setRemoteDescription({ type: 'answer', sdp: msg.sdp });
+          setStatus('Connected');
+        }
       } else if (msg.type === 'ice') {
-        if (msg.candidate) await pc.addIceCandidate(msg.candidate);
+        if (msg.candidate) {
+          if (pc) {
+            await pc.addIceCandidate(msg.candidate);
+          } else {
+            pendingRemoteCandidates.push(msg.candidate);
+          }
+        }
+      } else if (msg.type === 'peer-disconnect') {
+        setStatus('Disconnected');
       }
     };
   });
@@ -93,11 +185,10 @@ function sendSignal(payload) {
   ws?.send(JSON.stringify(payload));
 }
 
-async function setupPeer(role) {
+async function setupPeer() {
   pc = new RTCPeerConnection({
     iceServers: [
       { urls: 'stun:stun.l.google.com:19302' },
-      // Add TURN here if available, e.g., { urls: 'turn:your-turn:3478', username, credential }
     ],
   });
 
@@ -107,229 +198,85 @@ async function setupPeer(role) {
 
   pc.onconnectionstatechange = () => setStatus(`Peer: ${pc.connectionState}`);
 
-  pc.ontrack = (event) => {
-    remoteVideo.srcObject = event.streams[0];
-  };
-
-  if (role === 'host') {
-    dataChannel = pc.createDataChannel('data');
-    setupDataChannel(dataChannel);
-  } else {
-    pc.ondatachannel = (event) => {
-      dataChannel = event.channel;
-      setupDataChannel(dataChannel);
-    };
-  }
-}
-
-function setupDataChannel(dc) {
-  dc.binaryType = 'arraybuffer';
-  dc.onopen = () => log('Data channel open');
-  dc.onmessage = (event) => {
-    handleData(event.data);
-  };
-  dc.onclose = () => log('Data channel closed');
-}
-
-function handleData(raw) {
-  try {
-    const msg = typeof raw === 'string' ? JSON.parse(raw) : raw;
-    if (msg && msg.type === 'files-meta') {
-      incomingFile = { name: msg.name, size: msg.size, type: msg.mimetype || 'application/octet-stream', received: 0, chunks: [] };
-      log(`Receiving file ${incomingFile.name} (${Math.round(incomingFile.size / 1024)} KB)`);
-    } else if (msg && msg.type === 'files-complete') {
-      if (incomingFile) {
-        const blob = new Blob(incomingFile.chunks, { type: incomingFile.type });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = incomingFile.name;
-        a.click();
-        URL.revokeObjectURL(url);
-        log(`Saved file ${incomingFile.name}`);
-        incomingFile = null;
-      }
-    } else if (msg && msg.type === 'files-chunk') {
-      // Not expected as JSON; chunks come as ArrayBuffer.
-    } else {
-      log(`Data: ${raw}`);
-    }
-  } catch (e) {
-    // Might be binary chunk
-    if (incomingFile && raw instanceof ArrayBuffer) {
-      incomingFile.chunks.push(raw);
-      incomingFile.received += raw.byteLength;
-      const pct = ((incomingFile.received / incomingFile.size) * 100).toFixed(1);
-      log(`Receiving chunk... ${pct}%`);
-    } else {
-      log('Unknown data received');
-    }
-  }
+  pc.onconnectionstatechange = () => setStatus(`Peer: ${pc.connectionState}`);
 }
 
 async function startHost() {
   setStatus('Preparing host...');
+  await setupPeer();
 
-  await initConfig();
-  if (!localSessionId) {
-    const session = await createSession();
-    localSessionId = session.sessionId;
-    hostSessionPill.textContent = localSessionId;
+  const sources = await window.electronAPI.getSources();
+  const primary = sources[0];
+  if (!primary) {
+    setStatus('No screen source');
+    return;
   }
 
-  await connectSignaling(localSessionId, 'host');
-  await setupPeer('host');
-
-  const sourceId = sourceSelect.value;
   const stream = await navigator.mediaDevices.getUserMedia({
     audio: false,
     video: {
       mandatory: {
         chromeMediaSource: 'desktop',
-        chromeMediaSourceId: sourceId,
+        chromeMediaSourceId: primary.id,
       },
     },
   });
+
   stream.getTracks().forEach((t) => pc.addTrack(t, stream));
+
+  for (const cand of pendingRemoteCandidates) {
+    await pc.addIceCandidate(cand);
+  }
+  pendingRemoteCandidates = [];
 
   const offer = await pc.createOffer();
   await pc.setLocalDescription(offer);
   sendSignal({ type: 'offer', sdp: offer.sdp });
-
-  setStatus(`Hosting. Session ID: ${localSessionId}`);
-  log(`Hosting with session ${localSessionId}`);
+  setStatus('Waiting for response...');
 }
 
-async function joinSession() {
-  setStatus('Joining...');
-  await initConfig();
-  const sessionId = joinSessionIdInput.value.trim();
-  await connectSignaling(sessionId, 'viewer');
-  await setupPeer('viewer');
-  setStatus('Waiting for offer...');
-}
-
-async function handleOffer(msg) {
-  await pc.setRemoteDescription({ type: 'offer', sdp: msg.sdp });
-  const answer = await pc.createAnswer();
-  await pc.setLocalDescription(answer);
-  sendSignal({ type: 'answer', sdp: answer.sdp });
-  setStatus('Connected');
-  log('Answer sent');
-}
-
-async function handleAnswer(msg) {
-  await pc.setRemoteDescription({ type: 'answer', sdp: msg.sdp });
-  setStatus('Connected');
-  log('Answer received');
-}
-
-btnStartHost.addEventListener('click', () => {
-  startHost().catch((e) => { log(e.message || e); setStatus('Error'); });
-});
-
-btnJoin.addEventListener('click', () => {
-  joinSession().catch((e) => { log(e.message || e); setStatus('Error'); });
-});
-
-btnCopySession.addEventListener('click', () => {
-  navigator.clipboard.writeText(hostSessionPill.textContent || '');
-});
-
-btnRefreshId.addEventListener('click', async () => {
-  try {
-    setStatus('Refreshing ID...');
-    const session = await createSession();
-    localSessionId = session.sessionId;
-    hostSessionPill.textContent = localSessionId;
-    log(`New ID: ${localSessionId}`);
-    setStatus('Ready');
-  } catch (e) {
-    setStatus('Error');
-    log(e.message || e);
-  }
-});
-
-btnClearLog.addEventListener('click', () => {
-  logEl.textContent = '';
-});
-
-btnSendFiles.addEventListener('click', () => {
-  if (!dataChannel || dataChannel.readyState !== 'open') {
-    log('Data channel not open');
-    return;
-  }
-  const files = fileInput.files;
-  if (!files || files.length === 0) {
-    log('No files selected');
-    return;
-  }
-  sendQueue = Array.from(files);
-  if (sending) {
-    log('Already sending files...');
-    return;
-  }
-  log(`Sending ${sendQueue.length} file(s)`);
-  sendNextFile();
-});
-
-function sendNextFile() {
-  const file = sendQueue.shift();
-  if (!file) {
-    sending = false;
-    log('All files sent');
-    return;
-  }
-  sending = true;
-  log(`Sending ${file.name} (${Math.round(file.size / 1024)} KB)`);
-
-  dataChannel.send(JSON.stringify({ type: 'files-meta', name: file.name, size: file.size, mimetype: file.type || 'application/octet-stream' }));
-
-  const reader = new FileReader();
-  let offset = 0;
-
-  reader.onload = (e) => {
-    if (e.target.error) {
-      log('File read error');
-      sendNextFile();
-      return;
-    }
-    const buffer = e.target.result;
-    dataChannel.send(buffer);
-    offset += buffer.byteLength;
-    const pct = ((offset / file.size) * 100).toFixed(1);
-    log(`Sent ${file.name} ... ${pct}%`);
-    if (offset < file.size) {
-      readSlice(offset);
-    } else {
-      dataChannel.send(JSON.stringify({ type: 'files-complete' }));
-      log(`File sent: ${file.name}`);
-      sendNextFile();
-    }
-  };
-
-  const readSlice = (o) => {
-    const slice = file.slice(o, o + CHUNK_SIZE);
-    reader.readAsArrayBuffer(slice);
-  };
-
-  readSlice(0);
+function generateLocalId() {
+  return `JDO-${Math.random().toString(36).slice(2, 6).toUpperCase()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
 }
 
 async function bootstrap() {
   setStatus('Initializing...');
   await initConfig();
-  loadSources().catch(console.error);
-  try {
-    const session = await createSession();
-    localSessionId = session.sessionId;
+
+  log(`WS_URL=${config.WS_URL}`);
+
+  wireSecurityActions();
+
+  const storedId = window.localStorage.getItem('jdo-session-id');
+  if (storedId) {
+    localSessionId = storedId;
+    hostSessionPill.textContent = localSessionId;
+    setStatus('Ready');
+    log(`Using saved ID: ${localSessionId}`);
+    try {
+      await fetchSession(storedId);
+    } catch (e) {
+      log('Saved ID expired. Creating a new ID...');
+      localSessionId = null;
+    }
+  }
+
+  if (!localSessionId) {
+    try {
+      const session = await createSession();
+      localSessionId = session.sessionId;
+    } catch (e) {
+      log(`Server ID failed, using local ID: ${e.message || e}`);
+      localSessionId = generateLocalId();
+    }
+
+    window.localStorage.setItem('jdo-session-id', localSessionId);
     hostSessionPill.textContent = localSessionId;
     setStatus('Ready');
     log(`Your ID: ${localSessionId}`);
-  } catch (e) {
-    setStatus('Error creating ID');
-    log(e.message || e);
   }
+  await connectSignaling(localSessionId, 'host');
+  setStatus('Waiting for request');
 }
 
 bootstrap();

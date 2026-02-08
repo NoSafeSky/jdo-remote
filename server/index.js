@@ -69,10 +69,12 @@ wss.on('connection', (ws, req) => {
   ws.sessionId = sessionId;
   ws.role = role;
 
-  ws.on('message', (data) => {
+ws.on('message', (data, isBinary) => {
     const peers = getSessionClients(sessionId).filter((c) => c !== ws);
+    // Ensure JSON signaling stays TEXT frames between browser clients.
+    const payload = isBinary ? data : data.toString('utf8');
     for (const peer of peers) {
-      peer.send(data);
+      peer.send(payload, { binary: isBinary });
     }
   });
 

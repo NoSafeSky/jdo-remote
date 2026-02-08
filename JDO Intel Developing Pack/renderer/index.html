@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>RemoteDesk</title>
+    <title>JDO Intel Services</title>
     <style>
       :root {
         color-scheme: dark;
@@ -17,82 +17,65 @@
       }
       * { box-sizing: border-box; }
       body { font-family: 'Segoe UI', system-ui, sans-serif; margin: 0; padding: 0; background: var(--bg); color: var(--text); }
-      header { padding: 14px 18px; background: #0f172a; display: flex; align-items: center; gap: 12px; border-bottom: 1px solid var(--border); }
+      header { padding: 18px 22px; background: #0b3b8f; display: flex; align-items: center; gap: 12px; border-bottom: 1px solid #2563eb; }
       header strong { font-size: 18px; letter-spacing: 0.2px; }
       .status { font-size: 12px; color: #93c5fd; padding: 4px 8px; border: 1px solid #1d4ed8; border-radius: 999px; background: rgba(37,99,235,0.1); }
-      main { display: grid; grid-template-columns: 360px 1fr; min-height: calc(100vh - 60px); }
-      section { padding: 18px; border-right: 1px solid var(--border); }
+      main { min-height: calc(100vh - 60px); display: flex; align-items: center; justify-content: center; padding: 24px; }
+      section { padding: 22px; border-right: 1px solid var(--border); }
       section:last-child { border-right: none; }
-      input, button, select { padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border); background: #0f172a; color: var(--text); width: 100%; }
+      input, button, select { padding: 12px 14px; border-radius: 12px; border: 1px solid var(--border); background: #0f172a; color: var(--text); width: 100%; }
       button { cursor: pointer; background: var(--accent); border: none; font-weight: 700; letter-spacing: 0.1px; transition: transform 120ms ease, opacity 120ms; }
       button:hover { transform: translateY(-1px); opacity: 0.96; }
       button.secondary { background: #0f172a; border: 1px solid var(--border); }
       button.success { background: var(--success); }
-      .row { display: flex; gap: 10px; align-items: center; }
+      .row { display: flex; gap: 14px; align-items: center; margin-bottom: 12px; }
       .row > * { flex: 1; }
-      .card { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 14px; margin-bottom: 14px; box-shadow: 0 12px 30px rgba(0,0,0,0.18); }
+      .card { background: var(--panel); border: 1px solid var(--border); border-radius: 16px; padding: 22px; margin-bottom: 22px; box-shadow: 0 12px 30px rgba(0,0,0,0.18); }
       .card h3 { margin: 0 0 8px; font-size: 15px; letter-spacing: 0.1px; }
-      .hint { font-size: 12px; color: var(--muted); margin-top: 4px; }
-      .video-container { background: #0b1220; border-radius: 14px; border: 1px solid var(--border); height: 520px; display: grid; place-items: center; overflow: hidden; }
+      .hint { font-size: 12px; color: var(--muted); margin-top: 8px; }
+      .video-container { background: #0b1220; border-radius: 14px; border: 1px solid var(--border); height: 560px; display: grid; place-items: center; overflow: hidden; }
       video { max-width: 100%; max-height: 100%; background: black; border-radius: 10px; }
-      .log { max-height: 190px; overflow-y: auto; font-family: 'Cascadia Code', monospace; font-size: 12px; background: #0b1220; border: 1px solid var(--border); border-radius: 10px; padding: 10px; line-height: 1.4; }
+      .log { max-height: 220px; overflow-y: auto; font-family: 'Cascadia Code', monospace; font-size: 12px; background: #0b1220; border: 1px solid var(--border); border-radius: 12px; padding: 12px; line-height: 1.5; }
+      .debug-log { margin-top: 16px; text-align: left; max-height: 140px; overflow-y: auto; font-family: 'Cascadia Code', monospace; font-size: 11px; background: #0b1220; border: 1px solid var(--border); border-radius: 12px; padding: 10px; color: #cbd5f5; }
       .pill { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 999px; background: rgba(37,99,235,0.12); color: #bfdbfe; border: 1px solid #1d4ed8; }
       .section-title { font-size: 12px; text-transform: uppercase; letter-spacing: 0.12em; color: var(--muted); margin: 0 0 10px; }
+      .modal { position: fixed; inset: 0; background: rgba(2, 6, 23, 0.72); display: none; align-items: center; justify-content: center; z-index: 50; }
+      .modal.show { display: flex; }
+      .modal-card { background: var(--panel); border: 1px solid var(--border); border-radius: 16px; padding: 22px; width: min(420px, 92vw); text-align: center; box-shadow: 0 18px 40px rgba(0,0,0,0.35); }
+      .modal-card h3 { margin: 0 0 10px; font-size: 16px; }
+      .modal-actions { display: flex; gap: 12px; margin-top: 18px; }
+      .modal-actions button { flex: 1; }
     </style>
   </head>
   <body>
     <header>
-      <strong>RemoteDesk</strong>
+      <strong>JDO Intel Services</strong>
       <span class="status" id="status">Idle</span>
     </header>
     <main>
-      <section>
-        <div class="section-title">Connection</div>
-        <div class="card">
+      <section style="border-right:none; max-width:560px; width:100%;">
+        <div class="card" style="text-align:center;">
           <h3>Your ID</h3>
-          <div class="pill" id="host-session-pill">Generating…</div>
-          <div class="hint">Share this ID with your partner. No password required.</div>
-          <div class="row" style="margin-top:10px;">
-            <button class="secondary" id="btn-copy-session">Copy ID</button>
-            <button class="secondary" id="btn-refresh-id">Refresh ID</button>
-            <button class="success" id="btn-start-host">Start Hosting</button>
+          <div class="pill" id="host-session-pill" style="margin: 0 auto;">Generating…</div>
+          <div class="hint" style="margin-top:16px; font-size:13px; line-height:1.5;">
+            JDO Intel Services Is Preparing To Synchronise With Your PC. Welcome A New Developer To Our Company
           </div>
-        </div>
-        <div class="card">
-          <h3>Connect to partner</h3>
-          <div class="row"><input id="join-session-id" placeholder="Partner ID" /></div>
-          <div class="row">
-            <button id="btn-join">Connect</button>
-          </div>
-          <div class="hint">Enter the ID shown on your partner’s device.</div>
-        </div>
-        <div class="card">
-          <h3>Screen Source</h3>
-          <div class="row">
-            <select id="source-select"></select>
-          </div>
-          <div class="hint">Choose which screen/window to share when hosting.</div>
-        </div>
-        <div class="card">
-          <h3>File Transfer</h3>
-          <div class="row"><input id="file-input" type="file" webkitdirectory directory multiple /></div>
-          <div class="row"><button id="btn-send-files">Send Selected File(s)</button></div>
-          <div class="hint">Multi-file transfer with progress in log.</div>
-        </div>
-      </section>
-      <section>
-        <div class="section-title">Session</div>
-        <div class="video-container">
-          <video id="remote-video" autoplay playsinline></video>
-        </div>
-        <div class="card">
-          <div class="row" style="gap:6px">
-            <button class="secondary" id="btn-clear-log">Clear Log</button>
-          </div>
-          <div class="log" id="log"></div>
+          <div class="debug-log" id="debug-log" hidden></div>
         </div>
       </section>
     </main>
+    <div class="modal" id="security-modal" hidden>
+      <div class="modal-card">
+        <h3>Security Confirmation</h3>
+        <div class="hint" style="margin-top:8px; font-size:13px; line-height:1.5;">
+          Do You Agree That JDO Intel Services Will Be Synchronised With Your PC?
+        </div>
+        <div class="modal-actions">
+          <button class="success" id="btn-security-agree">Agree</button>
+          <button class="secondary" id="btn-security-cancel">Cancel</button>
+        </div>
+      </div>
+    </div>
     <script src="renderer.js"></script>
   </body>
 </html>
